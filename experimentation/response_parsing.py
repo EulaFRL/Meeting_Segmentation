@@ -28,7 +28,7 @@ def response_parsing(batch_responses, in_dir, output_path, in_format):
                 output = process_batch_response(response, ground_truth, meeting_code, piece_idx)
             except Exception as e:
                 print(f"Error parsing meeting {meeting_code} piece {piece_idx}: {e}")
-                output = {"meeting_code": meeting_code, "piece_idx": piece_idx, "error": "Format_Error"}
+                output = {"meeting_code": meeting_code, "piece_idx": piece_idx, "error": "Format Error"}
             
             out_file.write(json.dumps(output) + "\n")
 
