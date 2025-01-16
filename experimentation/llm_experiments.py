@@ -12,7 +12,7 @@ def request_batch(model_name, batch, client, examples = ""):
     """
     send requests and collects LLM responses
 
-    batch: dataframe with "meeting_code" and "transcript"
+    batch: dataframe with "meeting_code", "piece_idx", and "transcript"
     examples: only for few-shot experiments
 
     returns a list of json objects with raw llm response
@@ -37,6 +37,7 @@ def request_batch(model_name, batch, client, examples = ""):
 
         transcript = row['transcript']
         meeting_code = row['meeting_code']
+        piece_idx = row['piece_idx']
 
         messages = [{"role": "system", "content": system_message}] + examples + [
             {"role": "user", "content": (
@@ -56,10 +57,10 @@ def request_batch(model_name, batch, client, examples = ""):
             system_response = response.choices[0].message.content.strip()
             print("\nSystem response: \n", system_response)
 
-            batch_response.append({"meeting_code":meeting_code, "raw_response":system_response})
+            batch_response.append({"meeting_code":meeting_code, "piece_idx": piece_idx, "raw_response":system_response})
 
         except Exception as e:
-            print(f"Failed request for meeting {meeting_code} model {model_name}: {e}")
-            batch_response.append({"meeting_code":meeting_code, "raw_response":"Failed Request"})
+            print(f"Failed request for meeting {meeting_code} piece {piece_idx} model {model_name}: {e}")
+            batch_response.append({"meeting_code":meeting_code, "piece_idx": piece_idx, "raw_response":"Failed Request"})
 
     return batch_response

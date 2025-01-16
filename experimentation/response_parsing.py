@@ -14,6 +14,7 @@ def response_parsing(batch_responses, in_dir, output_path, in_format):
     with open(output_path, "a") as out_file:
         for response in batch_responses:
             meeting_code = response["meeting_code"]
+            piece_idx = response["piece_idx"]
             input_path = os.path.join(in_dir, in_format.replace("meeting_code", meeting_code))
 
             if not os.path.exists(input_path):
@@ -21,17 +22,17 @@ def response_parsing(batch_responses, in_dir, output_path, in_format):
                 continue
 
             with open(input_path, "r") as gt_file:
-                ground_truth = json.load(gt_file)
+                ground_truth = json.load(gt_file)[piece_idx]
 
             try:
-                output = process_batch_response(response, ground_truth, meeting_code)
+                output = process_batch_response(response, ground_truth, meeting_code, piece_idx)
             except Exception as e:
-                print(f"Error parsing meeting {meeting_code}: {e}")
-                output = {"meeting_code": meeting_code, "error": "Parsing_Error"}
+                print(f"Error parsing meeting {meeting_code} piece {piece_idx}: {e}")
+                output = {"meeting_code": meeting_code, "piece_idx": piece_idx, "error": "Format_Error"}
             
             out_file.write(json.dumps(output) + "\n")
 
-def process_batch_response(response, ground_truth, meeting_code):
+def process_batch_response(response, ground_truth, meeting_code, piece_idx):
     """Process a single batch response."""
     transcript = ground_truth['transcript']
     transcript_ls = transcript_2_sentences(transcript)
@@ -58,12 +59,12 @@ def process_batch_response(response, ground_truth, meeting_code):
 
     raw_response = response['raw_response']
     if raw_response == "Failed Request":
-        return {"meeting_code": meeting_code, "error": "Failed Request"}
+        return {"meeting_code": meeting_code, "piece_idx": piece_idx, "error": "Failed Request"}
     
     parsed_response = extract_json(raw_response)
 
     if not parsed_response:
-        raise ValueError(f"Invalid JSON format in response for meeting {meeting_code}.")
+        raise ValueError(f"Invalid JSON format in response for meeting {meeting_code} piece {piece_idx}.")
 
     llm_summaries = []
     llm_starts_temp = []
@@ -78,12 +79,15 @@ def process_batch_response(response, ground_truth, meeting_code):
         if start:
             llm_starts.append(start)
             idx = start[1]
+        else:
+            return {"meeting_code": meeting_code, "piece_idx": piece_idx, "error": "Hallucination"}
 
     llm_starts_idx = [transcript_dict[start] for start in llm_starts if start in transcript_dict]
     llm_starts_idx.append(len(transcript_ls))
 
     output = {
         "meeting_code": meeting_code,
+        "piece_idx": piece_idx,
         "segment IDs": ground_truth['item IDs'],
         "gt start indices": gt_starts_idx,
         "llm start indices": llm_starts_idx,
