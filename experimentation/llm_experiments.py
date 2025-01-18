@@ -10,18 +10,19 @@ import concurrent.futures
 import random
 import os
 import re
+import time
+import requests
 
-def request_batch(model_name, batch, client, examples = []):
+def request_batch(model_name, batch, client, examples = [], max_retries=5, retry_delay=5):
     """
-    send requests and collects LLM responses
-
+    Send requests and collect LLM responses with infinite retry mechanism for connection errors only.
+    
     batch: dataframe with "meeting_code", "piece_idx", and "transcript"
     examples: only for few-shot experiments
-
-    returns a list of json objects with raw llm response
-    request error: fill "Failed Request" in place of llm response
+    
+    returns a list of json objects with raw llm response.
+    If the request fails, "Failed Request" is placed in the response.
     """
-
     system_message = """
                     Imagine you are a meeting recorder who will be asked to segment the transcript of a city council meeting. Please segment based on the item discussed.
                     All segments are consecutive and non-overlapping, and the concatenation of them should consist the entire transcript. 
@@ -33,10 +34,10 @@ def request_batch(model_name, batch, client, examples = []):
                     The core information for each segment is a motion/agenda being discussed and the decisions made about it. When it involves funding, the amount of funds is also important. Your principle of segmentation and summarization should center around such core information. 
                     Please respond in the format: number of segments: N, {"Segment1": {"starting sentence": "......", "summary": "......"}, "Segment2": {"starting sentence": "......", "summary": "......"}, ......, "SegmentN": {"starting sentence": "......", "summary": "......"}}
                     """
-
+    
     batch_response = []
 
-    for _,row in batch.iterrows():
+    for _, row in batch.iterrows():
 
         transcript = row['transcript']
         meeting_code = row['meeting_code']
@@ -47,24 +48,55 @@ def request_batch(model_name, batch, client, examples = []):
                 f'Following the colon is the transcript, please do not include this prompt sentence before the colon: {transcript}'
             )}
         ]
-        
-        try:
-            #make API call
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=0.0,
-                max_tokens=700,
-            )
-            #observe system response
-            system_response = response.choices[0].message.content.strip()
-            print("\nSystem response: \n", system_response)
 
-            batch_response.append({"meeting_code":meeting_code, "piece_idx": piece_idx, "raw_response":system_response})
+        retry_attempts = 0
 
-        except Exception as e:
-            print(f"Failed request for meeting {meeting_code} piece {piece_idx} model {model_name}: {e}")
-            batch_response.append({"meeting_code":meeting_code, "piece_idx": piece_idx, "raw_response":"Failed Request"})
+        while retry_attempts < max_retries:
+            try:
+                # Attempt API call
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0.0,
+                    # max_tokens=700,
+                )
+                
+                # Observe system response
+                system_response = response.choices[0].message.content.strip()
+                print("\nSystem response: \n", system_response)
+
+                # Store the successful response
+                batch_response.append({
+                    "meeting_code": meeting_code, 
+                    "piece_idx": piece_idx, 
+                    "raw_response": system_response
+                })
+                break  # Exit the retry loop on success
+
+            except requests.exceptions.ConnectionError as e:  # Catch connection errors specifically
+                retry_attempts += 1
+                print(f"Connection error for meeting {meeting_code} piece {piece_idx} model {model_name}: {e}")
+
+                if retry_attempts < max_retries:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)  # Wait before retrying
+                else:
+                    print(f"Max retries reached for meeting {meeting_code} piece {piece_idx}. Marking as failed.")
+                    batch_response.append({
+                        "meeting_code": meeting_code, 
+                        "piece_idx": piece_idx, 
+                        "raw_response": "Failed Request"
+                    })
+                continue  # Only retry on connection errors
+            
+            except Exception as e:  # For other types of errors (e.g., invalid input, rate limits)
+                print(f"Failed request for meeting {meeting_code} piece {piece_idx} model {model_name}: {e}")
+                batch_response.append({
+                    "meeting_code": meeting_code, 
+                    "piece_idx": piece_idx, 
+                    "raw_response": "Failed Request"
+                })
+                break  # Exit the retry loop for other errors
 
     return batch_response
 
@@ -152,7 +184,7 @@ def city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n
                     piece = meeting[i]
                     batch.loc[len(batch)] = [re.search(r'_(\d+)_', meeting_path).group(1), i, piece["transcript"]]
             training_paths = [path for path in all_meeting_paths if not path in batch_paths] #avoid overlapping with test examples in the batch
-            examples = "" #zero shot
+            examples = [] #zero shot
             if few_shot:
                 examples = generate_examples(training_paths, num_examples)
             #submit process batch function
@@ -190,4 +222,4 @@ if __name__ == "__main__":
         all_meeting_paths.extend(filepaths)
 
     for city, city_filepaths in city_filepath_dict.items():
-        city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n_threads, batch_size, few_shot=True)
+        city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n_threads, batch_size, few_shot=False)
