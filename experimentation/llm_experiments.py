@@ -11,7 +11,7 @@ import random
 import os
 import re
 
-def request_batch(model_name, batch, client, examples = ""):
+def request_batch(model_name, batch, client, examples = []):
     """
     send requests and collects LLM responses
 
@@ -72,9 +72,9 @@ def compose_sample_response(meeting_path):
     """extracts one piece from the meeting, compose sample LLM response and returns the transcript along with the response"""
 
     with open(meeting_path, "r") as f:
-        meeting = json.load(meeting_path)
+        meeting = json.load(f)
     
-    sample_piece = random.select(meeting)   #selects one piece from the meeting
+    sample_piece = random.choice(meeting)   #selects one piece from the meeting
     n_segments = sample_piece["#items"]
     # response format: "number of segments: N, {"Segment1": {"starting sentence": "......", "summary": "......"}, "Segment2": {"starting sentence": "......", "summary": "......"}, ......, "SegmentN": {"starting sentence": "......", "summary": "......"}}"
     response = f"number of segments: {n_segments}, {{"
@@ -107,7 +107,8 @@ def generate_examples(training_paths, num_examples):
     # if ".DS_Store" in all_meeting_filename_list:
     #     all_meeting_filename_list = [i for i in all_meeting_filename_list if i != ".DS_Store"]
 
-    sampled_meeting_filepath_list = training_paths.sample(n=num_examples, random_state=42)
+    random.seed = 42
+    sampled_meeting_filepath_list = random.sample(training_paths, num_examples)
     sampled_instances = []
     for meeting_path in sampled_meeting_filepath_list:
         sampled_instances.append(compose_sample_response(meeting_path)) #returns (transcript,response)
@@ -117,17 +118,13 @@ def generate_examples(training_paths, num_examples):
     examples = []
 
     for transcript, response in sampled_instances:
-        #add user and assistant examples for this score
-        #assistant role displays the correct format of response, helps in parsing
-        #identifiers are used as index here, only matched both identifiers can map response
-        #keywords are displayed because model might not be able to recognised un-lemmatised keywords
         examples.append(
             {"role": "user", "content": (
                 f'Following the colon is the transcript, please do not include this prompt sentence before the colon: {transcript}'
             )}
         )
         examples.append(
-            {"role": "assistant", "content": ({response})}
+            {"role": "assistant", "content": response}
         )
 
     return examples
@@ -145,11 +142,12 @@ def city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n
         for start in range(0, len(city_filepaths), n_threads):
             #batch: dataframe with "meeting_code", "piece_idx", and "transcript"
             batch = pd.DataFrame(columns=["meeting_code", "piece_idx", "transcript"])
-            batch_paths = city_filepaths.iloc[start:start + batch_size]
+            batch_paths = city_filepaths[start:start + batch_size]
             #a list to store model prediction
-            batch_responses = []
+            # batch_responses = []
             for meeting_path in batch_paths:
-                meeting = json.load(meeting_path)
+                with open(meeting_path) as f:
+                    meeting = json.load(f)
                 for i in range(len(meeting)):
                     piece = meeting[i]
                     batch.loc[len(batch)] = [re.search(r'_(\d+)_', meeting_path).group(1), i, piece["transcript"]]
@@ -158,26 +156,27 @@ def city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n
             if few_shot:
                 examples = generate_examples(training_paths, num_examples)
             #submit process batch function
-            futures.p(executor.submit(request_batch, model_name, batch, client, examples))
+            futures.append(executor.submit(request_batch, model_name, batch, client, examples))
 
         #progress bar
         #saves each completed user query
         for future in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"Processing {model_name}"):
-            try:
-                result = future.result() #retrieving result
-                batch_responses.extend(result) #save each result to results list
-            except Exception as e:
-                print(f"Error in processing batch: {e}")
-        #results dataframe
-        response_parsing.response_parsing(batch_responses, GROUND_TRUTH_DIRS_DICT[city], output_path, CITY_IN_FORMAT_DICT[city])
-        print(f"Results saved to {output_path}")
+            # try:
+                batch_responses = future.result() #retrieving result
+                response_parsing.response_parsing(batch_responses, GROUND_TRUTH_DIRS_DICT[city], output_path, CITY_IN_FORMAT_DICT[city])
+                print(f"Batch results saved to {output_path}")
+            # except Exception as e:
+            #     print(f"Error in processing batch: {e}")
+        # #results dataframe
+        # response_parsing.response_parsing(batch_responses, GROUND_TRUTH_DIRS_DICT[city], output_path, CITY_IN_FORMAT_DICT[city])
+        print(f"All city results saved to {output_path}")
 
 
 if __name__ == "__main__":
     #TODO
     client = OpenAI(api_key=OPENAI_KEY)
     model_name = 'gpt-4o-mini'
-    num_examples = 3
+    num_examples = 3    #if improvement not great, try manually selecting a few shorter pieces for training
     n_threads = 15
     batch_size = 10
 
@@ -191,4 +190,4 @@ if __name__ == "__main__":
         all_meeting_paths.extend(filepaths)
 
     for city, city_filepaths in city_filepath_dict.items():
-        city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n_threads, batch_size, few_shot=False)
+        city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n_threads, batch_size, few_shot=True)
