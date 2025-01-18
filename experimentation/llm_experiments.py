@@ -1,4 +1,4 @@
-from config import OPENAI_KEY, LLAMA_KEY, GROUND_TRUTH_DIRS_DICT, CITY_INFORMAT_DICT
+from config import OPENAI_KEY, LLAMA_KEY, GROUND_TRUTH_DIRS_DICT, CITY_IN_FORMAT_DICT
 import response_parsing
 
 import json
@@ -169,7 +169,7 @@ def city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n
             except Exception as e:
                 print(f"Error in processing batch: {e}")
         #results dataframe
-        response_parsing.response_parsing(batch_responses, GROUND_TRUTH_DIRS_DICT[city], output_path, CITY_INFORMAT_DICT[city])
+        response_parsing.response_parsing(batch_responses, GROUND_TRUTH_DIRS_DICT[city], output_path, CITY_IN_FORMAT_DICT[city])
         print(f"Results saved to {output_path}")
 
 
