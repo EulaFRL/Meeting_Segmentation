@@ -1,3 +1,5 @@
 OPENAI_KEY = ""
 LLAMA_KEY = ""
 
+GROUND_TRUTH_DIRS = dict()
+CITY_INFORMAT_DICT = dict()
