@@ -107,7 +107,7 @@ def request_batch(model_name, batch, client, examples = [], max_retries=5, retry
                 #         error_message = error_data['error'].get('message', '')
                 # if 'context_length_exceeded' in e:  # exceed context length
                 if re.search('maximum context length',str(e)): # exceed context length
-                    if len(messages) > 5: 
+                    if len(messages) > 5: # at least one example
                         messages.remove(messages[1])
                         messages.remove(messages[2])
                         print(f"Retry request length: {len(str(messages).split())} tokens")
