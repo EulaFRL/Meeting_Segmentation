@@ -1,5 +1,5 @@
 import math
-from config import OPENAI_KEY, LLAMA_KEY, GROUND_TRUTH_DIRS_DICT, CITY_IN_FORMAT_DICT
+from config import OPENAI_KEY, OTHER_KEY, GROUND_TRUTH_DIRS_DICT, CITY_IN_FORMAT_DICT, OUT_DIR
 import response_parsing
 
 import json
@@ -34,10 +34,11 @@ def request_batch(model_name, batch, client, examples = [], max_retries=5, retry
                     The substring should be a unique substring of the transcript, containing one to two sentences.
                     Please copy the substrings exactly so that they are exactly a substring of the transcript.
                     Whether there are grammatical errors or not, do not make any changes. Be extra mindful in copying exactly when it involves numbers.
+                    Please make sure the substrings are in the correct order as how they appeared in the original transcript.
                     Notice that the starting substring of the first segment should be the starting subsrting of the whole transcript.
                     At the beginning of your response, please identify the number of segments: N.
                     Please also make sure that your segments are in the order as they appear in the transcript.
-                    Please respond in this format and replace Starting_Substring with the actual starting substring of each segment: number of segments: N, ["Starting_Substring1", "Starting_Substring2", ......, "Starting SubstringN"]
+                    Please respond in this format and replace Starting_Substring with the actual starting substring of each segment: number of segments: _, ["Starting_Substring1", "Starting_Substring2", ......, "Starting SubstringN"]
                     """
     
     batch_response = []
@@ -47,15 +48,30 @@ def request_batch(model_name, batch, client, examples = [], max_retries=5, retry
         transcript = row['transcript']
         meeting_code = row['meeting_code']
 
+        # messages = [{"role": "system", "content": system_message}] + examples + [
+        #     {"role": "user", "content": (
+        #         f"""In your segmentation, please copy the substrings exactly so that they are exactly a substring of the transcript.
+        #         Whether there are grammatical errors or not, do not make any changes. Be extra mindful in copying exactly when it involves numbers.
+        #         Please make sure the substrings are in the correct order as how they appeared in the original transcript.
+        #         Notice that the starting substring of the first segment should be the starting subsrting of the whole transcript.
+        #         At the beginning of your response, please identify the number of segments: N.
+        #         Please also make sure that your segments are in the order as they appear in the transcript.
+        #         Following the colon is the transcript you need to segmentize, please do not include this prompt sentence before the colon: {transcript}"""
+        #     )}
+        # ] #TODO
         messages = [{"role": "system", "content": system_message}] + examples + [
             {"role": "user", "content": (
-                f'Following the colon is the transcript, please do not include this prompt sentence before the colon: {transcript}'
+                f"""
+                Please make sure to follow the format: number of segments: _, ["Starting_Substring1", "Starting_Substring2", ......, "Starting SubstringN"]
+                Please control the length  of your response to ensure that you enclose all brackets and quotation marks.
+                Following the colon is the transcript you need to segmentize, please do not include this prompt sentence before the colon: {transcript}
+                """
             )}
         ]
 
         # print(f"Total number of tokens in request contents: {sum(len(message['content'].split()) for message in messages)}")
         message_len = [len(message['content'].split()) for message in messages]
-        while len(str(messages).split()) >= 80000:
+        while len(str(messages).split()) >= 80000 and len(messages) > 3:
             messages.remove(messages[1])
             messages.remove(messages[2]) # remove one example
 
@@ -71,12 +87,12 @@ def request_batch(model_name, batch, client, examples = [], max_retries=5, retry
                     model=model_name,
                     messages=messages,
                     temperature=0.0,
-                    max_tokens=1000,
+                    # max_tokens=700,
                 )
                 
                 # Observe system response
                 system_response = response.choices[0].message.content.strip()
-                print("\nSystem response: \n", system_response)
+                print(f"meeting: {meeting_code} \nSystem response: \n", system_response)
 
                 # Store the successful response
                 batch_response.append({
@@ -201,7 +217,11 @@ def generate_examples(training_paths, num_examples, max_tokens):
 def city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n_threads, batch_size, max_tokens, few_shot=False):
     """multi-thread sending requests in batch for one model and one city council"""
 
-    output_path = f"output_{model_name}_{city}.json"
+    # output_path = f"output_{model_name}_{city}.json"
+    # city_out_dir = os.path.join(OUT_DIR, f'{city}_few_shot_short') # TODO
+    city_out_dir = os.path.join(OUT_DIR, f'{city}_zero_shot_{os.path.basename(model_name)}')
+    if not os.path.exists(city_out_dir):
+        os.mkdir(city_out_dir)
 
     with concurrent.futures.ThreadPoolExecutor(n_threads) as executor:
         #to store future, one rating = one object = one future
@@ -220,7 +240,11 @@ def city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n
                 meeting_transcript = ""
                 for i in range(len(meeting)):
                     meeting_transcript += meeting[i]['transcript']
-                batch.loc[len(batch)] = [re.search(r'_(\d+)_', meeting_path).group(1), meeting_transcript]
+                meeting_code = re.search(r'_(\d+)_', meeting_path).group(1)
+                if os.path.exists(os.path.join(city_out_dir, f'{meeting_code}.json')):
+                    print(f'File already exists: {meeting_code}')
+                    continue
+                batch.loc[len(batch)] = [meeting_code, meeting_transcript]
             training_paths = [path for path in all_meeting_paths if not path in batch_paths] #avoid overlapping with test examples in the batch
             examples = [] #zero shot
             if few_shot:
@@ -233,13 +257,13 @@ def city_requests(model_name, client, city, city_filepaths, all_meeting_paths, n
         for future in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"Processing {model_name}"):
             # try:
                 batch_responses = future.result() #retrieving result
-                response_parsing.response_parsing(batch_responses, GROUND_TRUTH_DIRS_DICT[city], output_path, CITY_IN_FORMAT_DICT[city])
-                print(f"Batch results saved to {output_path}")
+                response_parsing.response_parsing(batch_responses, GROUND_TRUTH_DIRS_DICT[city], city_out_dir, CITY_IN_FORMAT_DICT[city])
+                print(f"Batch results saved to {city_out_dir}")
             # except Exception as e:
             #     print(f"Error in processing batch: {e}")
         # #results dataframe
         # response_parsing.response_parsing(batch_responses, GROUND_TRUTH_DIRS_DICT[city], output_path, CITY_IN_FORMAT_DICT[city])
-        print(f"All city results saved to {output_path}")
+        print(f"All city results saved to {city_out_dir}")
 
 
 if __name__ == "__main__":
@@ -249,10 +273,14 @@ if __name__ == "__main__":
     """
 
     #TODO
-    client = OpenAI(api_key=OPENAI_KEY)
-    model_name = 'gpt-4o-mini'
-    num_examples = 10 #TODO
-    max_tokens = 5000 #maximum token limit on the length of sample transcipts
+    # client = OpenAI(api_key=OPENAI_KEY)
+    # model_name = 'gpt-4o-mini'
+    # num_examples = 3 #TODO
+    client = OpenAI(api_key=OTHER_KEY, base_url='https://api.aimlapi.com')
+    model_name = 'meta-llama/Llama-3.3-70B-Instruct-Turbo'
+    num_examples = 0
+    max_tokens = 1000 #maximum token limit on the length of sample transcipts (not too long to cause hallucinations)
+
     n_threads = 15
     batch_size = 10
 
